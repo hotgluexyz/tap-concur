@@ -75,7 +75,8 @@ def merge_digest_onto_invoice(digest: dict[str, Any], detail: dict[str, Any]) ->
 
     line_items = merged.get("LineItems")
     if isinstance(line_items, dict) and "LineItem" in line_items:
-        merged["LineItems"] = line_items["LineItem"]
+        unwrapped = line_items["LineItem"]
+        merged["LineItems"] = unwrapped if isinstance(unwrapped, list) else [unwrapped]
 
     remit = merged.get("VendorRemitToIdentifier")
     if not remit and merged.get("VendorRemitAddress"):

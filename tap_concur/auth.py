@@ -59,7 +59,7 @@ class ConcurAuthenticator(OAuthAuthenticator, metaclass=SingletonMeta):
         self._tap._config["access_token"] = token_json["access_token"]
         self._tap._config["expires_in"] = self.expires_in
         if token_json.get("refresh_token"):
-            self._tap.logger.info("Latest refresh token: %s", token_json["refresh_token"])
+            self._tap.logger.info("OAuth refresh token was rotated and persisted.")
             self._tap._config["refresh_token"] = token_json["refresh_token"]
         if token_json.get("geolocation"):
             self._tap._config["api_url"] = token_json["geolocation"]

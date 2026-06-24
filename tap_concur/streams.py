@@ -236,6 +236,7 @@ class InvoicesStream(ConcurStream):
         super().__init__(*args, **kwargs)
         self._vendor_codes: set[str] = set()
         self._vendor_names: set[str] = set()
+        self._earliest_failed_modified: str | None = None
 
     @override
     def setup_selected_filters(self) -> None:
@@ -278,10 +279,32 @@ class InvoicesStream(ConcurStream):
         start = self.config.get("start_date", "2000-01-01T00:00:00Z")
         return str(start)[:10]
 
+    def _register_failed_invoice(self, digest: dict, context: dict | None) -> None:
+        """Cap the bookmark so a failed invoice is retried on the next run.
+
+        When a detail fetch fails the invoice is never emitted, but other invoices
+        with a newer ``LastModifiedDate`` would otherwise advance the bookmark past
+        it (the SDK promotes the max replication key value of emitted records). We
+        lower the replication-key signpost to the earliest failed invoice's
+        ``LastModifiedDate`` so ``finalize_state_progress_markers`` clamps the
+        bookmark and the next run's ``lastModifiedDateAfter`` re-includes it.
+        """
+        failed_modified = digest.get("LastModifiedDate")
+        if not failed_modified:
+            return
+        failed_modified = str(failed_modified)
+        if (
+            self._earliest_failed_modified is None
+            or failed_modified < self._earliest_failed_modified
+        ):
+            self._earliest_failed_modified = failed_modified
+            self._write_replication_key_signpost(context, self._earliest_failed_modified)
+
     @override
     def get_records(self, context: dict | None) -> Iterable[dict]:
         """List digests incrementally, then fetch full payment request per ID."""
         modified_after = self._incremental_filter_date(context)
+        self._earliest_failed_modified = None
         next_page_token: Any | None = None
 
         while True:
@@ -318,6 +341,7 @@ class InvoicesStream(ConcurStream):
                         payment_request_id,
                         ex,
                     )
+                    self._register_failed_invoice(digest, context)
                     continue
 
                 record = merge_digest_onto_invoice(digest, detail)
