@@ -71,9 +71,7 @@ class ConcurAuthenticator(OAuthAuthenticator, metaclass=SingletonMeta):
     @classmethod
     def create_for_stream(cls, stream) -> ConcurAuthenticator:
         """Create a singleton authenticator for the stream's tap."""
-        api_url = stream.config.get("api_url", "https://us.api.concursolutions.com").rstrip(
-            "/"
-        )
+        api_url = stream.config.get("api_url", "https://us.api.concursolutions.com").rstrip("/")
         config_file = getattr(stream._tap, "config_file", None)
         return cls(
             stream=stream,
