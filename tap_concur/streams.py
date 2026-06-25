@@ -20,6 +20,8 @@ from tap_concur.filters import (
 
 _ALLOCATION_SCHEMA = th.ObjectType(
     th.Property("Percentage", th.StringType),
+    th.Property("AllocationAccountCode", th.StringType),
+    th.Property("IsTestUser", th.StringType),
     th.Property("Custom1", th.StringType),
     th.Property("Custom2", th.StringType),
     th.Property("Custom3", th.StringType),
@@ -30,6 +32,16 @@ _ALLOCATION_SCHEMA = th.ObjectType(
     th.Property("Custom8", th.StringType),
     th.Property("Custom9", th.StringType),
     th.Property("Custom10", th.StringType),
+    th.Property("Custom11", th.StringType),
+    th.Property("Custom12", th.StringType),
+    th.Property("Custom13", th.StringType),
+    th.Property("Custom14", th.StringType),
+    th.Property("Custom15", th.StringType),
+    th.Property("Custom16", th.StringType),
+    th.Property("Custom17", th.StringType),
+    th.Property("Custom18", th.StringType),
+    th.Property("Custom19", th.StringType),
+    th.Property("Custom20", th.StringType),
 )
 
 _LINE_ITEM_SCHEMA = th.ObjectType(
