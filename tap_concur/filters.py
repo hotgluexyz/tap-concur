@@ -76,7 +76,12 @@ def merge_digest_onto_invoice(digest: dict[str, Any], detail: dict[str, Any]) ->
     line_items = merged.get("LineItems")
     if isinstance(line_items, dict) and "LineItem" in line_items:
         unwrapped = line_items["LineItem"]
-        merged["LineItems"] = unwrapped if isinstance(unwrapped, list) else [unwrapped]
+        line_items = unwrapped if isinstance(unwrapped, list) else [unwrapped]
+        merged["LineItems"] = line_items
+    if isinstance(line_items, list):
+        for line_item in line_items:
+            if isinstance(line_item, dict) and "Allocations" in line_item:
+                line_item["Allocations"] = _unwrap_allocations(line_item["Allocations"])
 
     remit = merged.get("VendorRemitToIdentifier")
     if not remit and merged.get("VendorRemitAddress"):
@@ -90,6 +95,24 @@ def merge_digest_onto_invoice(digest: dict[str, Any], detail: dict[str, Any]) ->
         }
 
     return merged
+
+
+def _unwrap_allocations(allocations: Any) -> list[Any] | None:
+    """Normalize Concur's ``{"Allocation": [...]}`` wrapper into a plain list.
+
+    The Payment Request API wraps the allocation list in a singular-named object,
+    but the stream schema (and downstream targets) expect ``Allocations`` to be an
+    array. Returns ``None`` when there is nothing to emit.
+    """
+    if allocations is None:
+        return None
+    if isinstance(allocations, dict):
+        allocations = allocations.get("Allocation")
+        if allocations is None:
+            return None
+    if isinstance(allocations, list):
+        return allocations
+    return [allocations]
 
 
 def parse_image_url_from_xml(xml_text: str) -> str | None:
