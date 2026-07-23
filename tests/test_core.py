@@ -1,6 +1,7 @@
 """Tests for tap-concur."""
 
 import datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 from hotglue_singer_sdk.testing import get_standard_tap_tests
@@ -72,8 +73,16 @@ def test_vendor_filter_by_name():
 
 def test_parse_vendor_filter_selection():
     selected = {
-        "vendor_code": ["V001", "V002"],
-        "clauses": [{"field": "vendor_name", "values": ["Beta Inc"]}],
+        "clause_1": {
+            "field": "vendor_code",
+            "operator": "IN",
+            "value": ["V001", "V002"],
+        },
+        "clause_2": {
+            "field": "vendor_name",
+            "operator": "EQ",
+            "value": "Beta Inc",
+        },
     }
     codes, names = parse_vendor_filter_selection(selected)
     assert codes == {"V001", "V002"}
@@ -90,3 +99,98 @@ def test_invoices_stream_has_child_context():
 def test_attachments_stream_is_child_of_invoices():
     assert AttachmentsStream.parent_stream_type is InvoicesStream
     assert AttachmentsStream.replication_key is None
+
+
+def test_invoices_get_records_filters_by_vendor_name_before_detail_fetch():
+    """VendorName filter should keep matching digests and skip detail for others."""
+    tap = TapConcur(config=SAMPLE_CONFIG)
+    stream = InvoicesStream(tap=tap)
+    stream._selected_filters = {
+        "clause_1": {
+            "field": "vendor_name",
+            "operator": "IN",
+            "value": ["Acme Corp"],
+        }
+    }
+    stream.setup_selected_filters()
+
+    digests = {
+        "PaymentRequestDigest": [
+            {
+                "PaymentRequestId": "PR-KEEP",
+                "LastModifiedDate": "2024-01-02 10:00:00.0",
+                "VendorCode": "V001",
+                "VendorName": "Acme Corp",
+            },
+            {
+                "PaymentRequestId": "PR-SKIP",
+                "LastModifiedDate": "2024-01-03 10:00:00.0",
+                "VendorCode": "V002",
+                "VendorName": "Other Vendor",
+            },
+        ],
+        "NextPage": None,
+    }
+    digest_response = MagicMock()
+    digest_response.json.return_value = digests
+
+    detail = {
+        "InvoiceNumber": "INV-KEEP",
+        "LineItems": [],
+    }
+
+    with (
+        patch.object(stream, "_authenticated_get", return_value=digest_response) as mock_get,
+        patch.object(stream, "_get_json", return_value=detail) as mock_detail,
+    ):
+        records = list(stream.get_records(context=None))
+
+    assert len(records) == 1
+    assert records[0]["PaymentRequestId"] == "PR-KEEP"
+    assert records[0]["VendorName"] == "Acme Corp"
+    assert records[0]["InvoiceNumber"] == "INV-KEEP"
+
+    mock_get.assert_called_once()
+    mock_detail.assert_called_once_with(
+        "/api/v3.0/invoice/paymentrequest/PR-KEEP",
+        headers={"Accept": "application/json"},
+    )
+
+
+def test_invoices_get_records_no_vendor_filter_fetches_all_details():
+    """Without vendor filters, every digest should trigger a detail fetch."""
+    tap = TapConcur(config=SAMPLE_CONFIG)
+    stream = InvoicesStream(tap=tap)
+    stream._selected_filters = {}
+    stream.setup_selected_filters()
+
+    digests = {
+        "PaymentRequestDigest": [
+            {
+                "PaymentRequestId": "PR-1",
+                "LastModifiedDate": "2024-01-02 10:00:00.0",
+                "VendorName": "Acme Corp",
+            },
+            {
+                "PaymentRequestId": "PR-2",
+                "LastModifiedDate": "2024-01-03 10:00:00.0",
+                "VendorName": "Other Vendor",
+            },
+        ],
+        "NextPage": None,
+    }
+    digest_response = MagicMock()
+    digest_response.json.return_value = digests
+
+    def _detail_for(path: str, **_kwargs):
+        payment_request_id = path.rsplit("/", 1)[-1]
+        return {"InvoiceNumber": f"INV-{payment_request_id}", "LineItems": []}
+
+    with (
+        patch.object(stream, "_authenticated_get", return_value=digest_response),
+        patch.object(stream, "_get_json", side_effect=_detail_for) as mock_detail,
+    ):
+        records = list(stream.get_records(context=None))
+
+    assert {r["PaymentRequestId"] for r in records} == {"PR-1", "PR-2"}
+    assert mock_detail.call_count == 2

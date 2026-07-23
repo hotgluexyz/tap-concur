@@ -342,6 +342,13 @@ class InvoicesStream(ConcurStream):
                 payment_request_id = digest.get("PaymentRequestId") or digest.get("ID")
                 if not payment_request_id:
                     continue
+                # Concur has no server-side vendor filter, so filter on the digest
+                # (which carries VendorCode/VendorName) before spending a request on
+                # the invoice detail for vendors we're going to discard anyway.
+                if not record_matches_vendor_filters(
+                    digest, self._vendor_codes, self._vendor_names
+                ):
+                    continue
                 try:
                     detail = self._get_json(
                         f"/api/v3.0/invoice/paymentrequest/{payment_request_id}",
@@ -356,12 +363,7 @@ class InvoicesStream(ConcurStream):
                     self._register_failed_invoice(digest, context)
                     continue
 
-                record = merge_digest_onto_invoice(digest, detail)
-                if not record_matches_vendor_filters(
-                    record, self._vendor_codes, self._vendor_names
-                ):
-                    continue
-                yield record
+                yield merge_digest_onto_invoice(digest, detail)
 
             next_page_token = body.get("NextPage")
             if not next_page_token:
