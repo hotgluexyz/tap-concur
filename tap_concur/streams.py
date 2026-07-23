@@ -596,6 +596,17 @@ class VendorsStream(ConcurStream):
         th.Property("URI", th.StringType),
     ).to_dict()
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._vendor_codes: set[str] = set()
+        self._vendor_names: set[str] = set()
+
+    @override
+    def setup_selected_filters(self) -> None:
+        self._vendor_codes, self._vendor_names = parse_vendor_filter_selection(
+            self._selected_filters
+        )
+
     def get_available_filters_metadata(self) -> dict[str, Any]:
         return {
             "supported_operators": ["AND", "OR"],
@@ -615,3 +626,62 @@ class VendorsStream(ConcurStream):
                 },
             },
         }
+
+    def _iter_vendor_pages(
+        self,
+        *,
+        extra_params: dict[str, Any] | None = None,
+    ) -> Iterable[dict]:
+        """Paginate ``GET /api/v3.1/invoice/vendors`` and yield vendor records."""
+        next_page_token: Any | None = None
+        while True:
+            if next_page_token and str(next_page_token).startswith("http"):
+                response = self._authenticated_get(
+                    str(next_page_token),
+                    extra_headers={"Accept": "application/json"},
+                )
+            else:
+                params: dict[str, Any] = {"limit": self.page_size}
+                if extra_params:
+                    params.update(extra_params)
+                response = self._authenticated_get(
+                    f"{self.url_base}/api/v3.1/invoice/vendors",
+                    params=params,
+                    extra_headers={"Accept": "application/json"},
+                )
+            body = response.json()
+            for vendor in body.get("Vendor") or []:
+                yield vendor
+            next_page_token = body.get("NextPage")
+            if not next_page_token:
+                break
+
+    @override
+    def get_records(self, context: dict | None) -> Iterable[dict]:
+        """List vendors; use Concur search params when vendor filters are set."""
+        # Concur accepts a single vendorCode / vendorName per request, so IN
+        # filters become one search per value. Unfiltered syncs page the full list.
+        search_params: list[dict[str, Any]] = []
+        for code in sorted(self._vendor_codes):
+            search_params.append({"vendorCode": code, "searchType": "exact"})
+        for name in sorted(self._vendor_names):
+            search_params.append({"vendorName": name, "searchType": "exact"})
+
+        if not search_params:
+            yield from self._iter_vendor_pages()
+            return
+
+        seen_ids: set[str] = set()
+        for params in search_params:
+            for vendor in self._iter_vendor_pages(extra_params=params):
+                vendor_id = vendor.get("ID") or (
+                    f"{vendor.get('VendorCode')}:{vendor.get('AddressCode')}"
+                )
+                if vendor_id in seen_ids:
+                    continue
+                if not record_matches_vendor_filters(
+                    vendor, self._vendor_codes, self._vendor_names
+                ):
+                    continue
+                seen_ids.add(vendor_id)
+                yield vendor
