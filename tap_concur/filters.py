@@ -21,12 +21,14 @@ def parse_vendor_filter_selection(selected_filters: dict | None) -> tuple[set[st
     if vendor_name_values:
         vendor_names.update(_as_list(vendor_name_values))
 
-    for clause in selected_filters.get("clauses", []):
+    for key, clause in selected_filters.items():
+        if not (isinstance(key, str) and key.startswith("clause_") and isinstance(clause, dict)):
+            continue
         field = clause.get("field") or clause.get("filter_name") or clause.get("name")
         values = clause.get("values") or clause.get("value")
-        if field in ("vendor_code", "vendor_id"):
+        if field in ("vendor_code", "vendor_id", "VendorCode"):
             vendor_codes.update(_as_list(values))
-        elif field == "vendor_name":
+        elif field in ("vendor_name", "VendorName"):
             vendor_names.update(_as_list(values))
 
     return vendor_codes, vendor_names
