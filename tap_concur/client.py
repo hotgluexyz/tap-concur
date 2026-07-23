@@ -124,8 +124,8 @@ class ConcurStream(RESTStream):
         """Derive a filename from a URL path, ignoring query parameters."""
         try:
             segment = urlparse(url).path.rstrip("/").split("/")[-1]
-            if segment:
-                return segment
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError):
+            return f"{fallback}.pdf"
+        if segment:
+            return segment
         return f"{fallback}.pdf"

@@ -12,7 +12,7 @@ from tap_concur.filters import (
     parse_vendor_filter_selection,
     record_matches_vendor_filters,
 )
-from tap_concur.streams import AttachmentsStream, InvoicesStream
+from tap_concur.streams import AttachmentsStream, InvoicesStream, VendorsStream
 from tap_concur.tap import TapConcur
 
 SAMPLE_CONFIG = {
@@ -194,3 +194,113 @@ def test_invoices_get_records_no_vendor_filter_fetches_all_details():
 
     assert {r["PaymentRequestId"] for r in records} == {"PR-1", "PR-2"}
     assert mock_detail.call_count == 2
+
+
+def test_vendors_get_records_pages_full_list_without_filters():
+    tap = TapConcur(config=SAMPLE_CONFIG)
+    stream = VendorsStream(tap=tap)
+    stream._selected_filters = {}
+    stream.setup_selected_filters()
+
+    page1 = MagicMock()
+    page1.json.return_value = {
+        "Vendor": [{"ID": "1", "VendorCode": "V001", "VendorName": "Acme"}],
+        "NextPage": "https://us2.api.concursolutions.com/api/v3.1/invoice/vendors?offset=abc",
+    }
+    page2 = MagicMock()
+    page2.json.return_value = {
+        "Vendor": [{"ID": "2", "VendorCode": "V002", "VendorName": "Beta"}],
+        "NextPage": None,
+    }
+
+    with patch.object(stream, "_authenticated_get", side_effect=[page1, page2]) as mock_get:
+        records = list(stream.get_records(context=None))
+
+    assert [r["ID"] for r in records] == ["1", "2"]
+    assert mock_get.call_count == 2
+    first_call_url = mock_get.call_args_list[0].args[0]
+    assert first_call_url.endswith("/api/v3.1/invoice/vendors")
+    assert mock_get.call_args_list[0].kwargs["params"]["limit"] == stream.page_size
+
+
+def test_vendors_pagination_applies_bare_offset_cursor():
+    """Concur may return NextPage as an offset string, not a full URL."""
+    tap = TapConcur(config=SAMPLE_CONFIG)
+    stream = VendorsStream(tap=tap)
+    stream._selected_filters = {}
+    stream.setup_selected_filters()
+
+    page1 = MagicMock()
+    page1.json.return_value = {
+        "Vendor": [{"ID": "1", "VendorCode": "V001", "VendorName": "Acme"}],
+        "NextPage": "offset-token-1",
+    }
+    page2 = MagicMock()
+    page2.json.return_value = {
+        "Vendor": [{"ID": "2", "VendorCode": "V002", "VendorName": "Beta"}],
+        "NextPage": None,
+    }
+
+    with patch.object(stream, "_authenticated_get", side_effect=[page1, page2]) as mock_get:
+        records = list(stream.get_records(context=None))
+
+    assert [r["ID"] for r in records] == ["1", "2"]
+    assert mock_get.call_count == 2
+    assert mock_get.call_args_list[1].kwargs["params"]["offset"] == "offset-token-1"
+
+
+def test_vendors_pagination_stops_on_repeated_next_page():
+    """Stop when Concur returns the same NextPage cursor repeatedly."""
+    tap = TapConcur(config=SAMPLE_CONFIG)
+    stream = VendorsStream(tap=tap)
+    stream._selected_filters = {}
+    stream.setup_selected_filters()
+
+    stuck_url = "https://us2.api.concursolutions.com/api/v3.1/invoice/vendors?offset=stuck"
+    page1 = MagicMock()
+    page1.json.return_value = {
+        "Vendor": [{"ID": "1", "VendorCode": "V001", "VendorName": "Acme"}],
+        "NextPage": stuck_url,
+    }
+    page2 = MagicMock()
+    page2.json.return_value = {
+        "Vendor": [{"ID": "1", "VendorCode": "V001", "VendorName": "Acme"}],
+        "NextPage": stuck_url,
+    }
+
+    with patch.object(stream, "_authenticated_get", side_effect=[page1, page2]) as mock_get:
+        records = list(stream.get_records(context=None))
+
+    assert [r["ID"] for r in records] == ["1", "1"]
+    assert mock_get.call_count == 2
+
+
+def test_vendors_get_records_uses_api_search_for_vendor_filters():
+    tap = TapConcur(config=SAMPLE_CONFIG)
+    stream = VendorsStream(tap=tap)
+    stream._selected_filters = {
+        "clause_1": {
+            "field": "vendor_name",
+            "operator": "IN",
+            "value": ["Acme Corp"],
+        }
+    }
+    stream.setup_selected_filters()
+
+    response = MagicMock()
+    response.json.return_value = {
+        "Vendor": [
+            {"ID": "1", "VendorCode": "V001", "VendorName": "Acme Corp"},
+            {"ID": "2", "VendorCode": "V002", "VendorName": "Other"},
+        ],
+        "NextPage": None,
+    }
+
+    with patch.object(stream, "_authenticated_get", return_value=response) as mock_get:
+        records = list(stream.get_records(context=None))
+
+    assert len(records) == 1
+    assert records[0]["VendorName"] == "Acme Corp"
+    params = mock_get.call_args.kwargs["params"]
+    assert params["vendorName"] == "Acme Corp"
+    assert params["searchType"] == "exact"

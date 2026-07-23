@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, ClassVar
 
 import requests
 from hotglue_singer_sdk import typing as th
+from hotglue_singer_sdk.exceptions import FatalAPIError, RetriableAPIError
 from typing_extensions import override
 
 from tap_concur.client import ConcurStream
@@ -119,7 +121,7 @@ class InvoicesStream(ConcurStream):
     """Payment requests (invoices/bills) with nested line items."""
 
     name = "invoices"
-    primary_keys = ["PaymentRequestId"]
+    primary_keys: ClassVar[list[str]] = ["PaymentRequestId"]
     replication_key = "LastModifiedDate"
     replication_format = "%Y-%m-%d %H:%M:%S"
     records_jsonpath = "$.PaymentRequestDigest[*]"
@@ -260,7 +262,7 @@ class InvoicesStream(ConcurStream):
     def get_child_context(
         self,
         record: dict,
-        context: Optional[dict] = None,
+        context: dict | None = None,
     ) -> dict:
         return {"payment_request_id": record["PaymentRequestId"]}
 
@@ -354,7 +356,13 @@ class InvoicesStream(ConcurStream):
                         f"/api/v3.0/invoice/paymentrequest/{payment_request_id}",
                         headers={"Accept": "application/json"},
                     )
-                except Exception as ex:
+                except (
+                    requests.RequestException,
+                    FatalAPIError,
+                    RetriableAPIError,
+                    ValueError,
+                    OSError,
+                ) as ex:
                     self.logger.warning(
                         "Failed to fetch payment request %s: %s",
                         payment_request_id,
@@ -375,7 +383,7 @@ class AttachmentsStream(ConcurStream):
 
     name = "attachments"
     parent_stream_type = InvoicesStream
-    primary_keys = ["payment_request_id", "file_name"]
+    primary_keys: ClassVar[list[str]] = ["payment_request_id", "file_name"]
     replication_key = None
 
     schema = th.PropertiesList(
@@ -392,7 +400,7 @@ class AttachmentsStream(ConcurStream):
     ).to_dict()
 
     @override
-    def get_context_state(self, context: Optional[dict]) -> dict:
+    def get_context_state(self, context: dict | None) -> dict:
         return self.stream_state
 
     def _output_folder(self, payment_request_id: str) -> Path:
@@ -464,7 +472,13 @@ class AttachmentsStream(ConcurStream):
                 "download_status": "success",
                 "error_message": None,
             }
-        except Exception as ex:
+        except (
+            requests.RequestException,
+            FatalAPIError,
+            RetriableAPIError,
+            OSError,
+            ValueError,
+        ) as ex:
             self.logger.error(
                 "Error downloading attachment for %s: %s",
                 payment_request_id,
@@ -480,7 +494,7 @@ class AttachmentsStream(ConcurStream):
             }
 
     @override
-    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+    def get_records(self, context: dict | None) -> Iterable[dict]:
         payment_request_id = context["payment_request_id"]
         image_url = f"{self.url_base}/api/image/v1.0/invoice/{payment_request_id}"
 
@@ -526,7 +540,7 @@ class VendorsStream(ConcurStream):
 
     name = "vendors"
     path = "/api/v3.1/invoice/vendors"
-    primary_keys = ["ID"]
+    primary_keys: ClassVar[list[str]] = ["ID"]
     replication_key = None
     records_jsonpath = "$.Vendor[*]"
 
@@ -655,8 +669,7 @@ class VendorsStream(ConcurStream):
                 )
             body = response.json()
             vendors = body.get("Vendor") or []
-            for vendor in vendors:
-                yield vendor
+            yield from vendors
 
             next_page_token = body.get("NextPage")
             if not next_page_token:

@@ -53,9 +53,7 @@ def record_matches_vendor_filters(
 
     if vendor_codes and code in vendor_codes:
         return True
-    if vendor_names and name in vendor_names:
-        return True
-    return False
+    return bool(vendor_names and name in vendor_names)
 
 
 def merge_digest_onto_invoice(digest: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
