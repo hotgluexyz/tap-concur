@@ -245,10 +245,12 @@ class InvoicesStream(ConcurStream):
     ).to_dict()
 
     def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        # Must init filter sets before super().__init__: Stream.__init__ calls
+        # setup_selected_filters() when the tap already has selected filters.
         self._vendor_codes: set[str] = set()
         self._vendor_names: set[str] = set()
         self._earliest_failed_modified: str | None = None
+        super().__init__(*args, **kwargs)
 
     @override
     def setup_selected_filters(self) -> None:
@@ -596,6 +598,17 @@ class VendorsStream(ConcurStream):
         th.Property("URI", th.StringType),
     ).to_dict()
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._vendor_codes: set[str] = set()
+        self._vendor_names: set[str] = set()
+
+    @override
+    def setup_selected_filters(self) -> None:
+        self._vendor_codes, self._vendor_names = parse_vendor_filter_selection(
+            self._selected_filters
+        )
+
     def get_available_filters_metadata(self) -> dict[str, Any]:
         return {
             "supported_operators": ["AND", "OR"],
@@ -615,3 +628,11 @@ class VendorsStream(ConcurStream):
                 },
             },
         }
+
+    @override
+    def get_records(self, context: dict | None) -> Iterable[dict]:
+        yield from (
+            v
+            for v in super().get_records(context)
+            if record_matches_vendor_filters(v, self._vendor_codes, self._vendor_names)
+        )
