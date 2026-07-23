@@ -634,6 +634,7 @@ class VendorsStream(ConcurStream):
     ) -> Iterable[dict]:
         """Paginate ``GET /api/v3.1/invoice/vendors`` and yield vendor records."""
         next_page_token: Any | None = None
+        seen_page_tokens: set[str] = set()
         while True:
             if next_page_token and str(next_page_token).startswith("http"):
                 response = self._authenticated_get(
@@ -644,16 +645,29 @@ class VendorsStream(ConcurStream):
                 params: dict[str, Any] = {"limit": self.page_size}
                 if extra_params:
                     params.update(extra_params)
+                # Concur sometimes returns a bare offset cursor instead of a full URL.
+                if next_page_token:
+                    params["offset"] = next_page_token
                 response = self._authenticated_get(
                     f"{self.url_base}/api/v3.1/invoice/vendors",
                     params=params,
                     extra_headers={"Accept": "application/json"},
                 )
             body = response.json()
-            for vendor in body.get("Vendor") or []:
+            vendors = body.get("Vendor") or []
+            for vendor in vendors:
                 yield vendor
+
             next_page_token = body.get("NextPage")
             if not next_page_token:
+                break
+            # Guard against Concur returning the same NextPage repeatedly (infinite loop).
+            token_key = str(next_page_token)
+            if token_key in seen_page_tokens:
+                break
+            seen_page_tokens.add(token_key)
+            # Empty page with a NextPage link also means we're done.
+            if not vendors:
                 break
 
     @override
