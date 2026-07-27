@@ -599,9 +599,11 @@ class VendorsStream(ConcurStream):
     ).to_dict()
 
     def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        # Must init filter sets before super().__init__: Stream.__init__ calls
+        # setup_selected_filters() when the tap already has selected filters.
         self._vendor_codes: set[str] = set()
         self._vendor_names: set[str] = set()
+        super().__init__(*args, **kwargs)
 
     @override
     def setup_selected_filters(self) -> None:
